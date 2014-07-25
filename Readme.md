@@ -8,4 +8,4 @@ Installation
 		./generate
 
 		mpicc image_normalization.c -fopenmp -o normalization
-		mpirun -np <# of parallel processes> normalization
+		mpirun normalization <newMin> <newMax> -np <# of parallel processes>
