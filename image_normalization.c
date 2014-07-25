@@ -66,6 +66,7 @@ void findMinMax(unsigned char *img, unsigned char *min, unsigned char *max, int 
 		localMax[i] = 0;
 	}
 
+	// the computation is divided among threads, each calculates localMin and localMax
 	#pragma omp parallel firstprivate(localMin, localMax) private(value) shared(img, size, min, max)
 	{
 		#pragma omp for
@@ -79,6 +80,7 @@ void findMinMax(unsigned char *img, unsigned char *min, unsigned char *max, int 
 			}
 		}
 
+		// localMin and localMax are reduced into global min and max
 		for(i = 0; i < 3; i++) {
 			#pragma omp critical
 			{
@@ -104,6 +106,7 @@ void normalize(unsigned char *img, int newMin, int newMax, unsigned char *min, u
 	}
 
 	if(img) {
+		// every thread normalizes its part of the image
 		#pragma omp parallel for shared(img) firstprivate(min, max, newMin, newMax)
 		for(i = 0; i < size; i++) {
 			int j = i % 3;
@@ -113,24 +116,34 @@ void normalize(unsigned char *img, int newMin, int newMax, unsigned char *min, u
 }
 
 int main(int argc, char *argv[]) {
+	// the image to normalize
 	unsigned char *image = readPPM("test.ppm");
 	int numtasks, rank;
 	int *displs;
 	int *recvcounts;
 	int *sendcounts;
 
+	// MPI initialization
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
 
+	// min size of the arrays and extra pixel to allocate
 	int nmin = x * y * 3 / numtasks;
 	int nextra = x * y * 3 % numtasks;
 
+	// integer array (of length numtasks)
+	// Entry i specifies the displacement (relative to sendbuf from which to take the outgoing data to process i
 	displs = (int *)malloc(numtasks * sizeof(int));
+	// integer array (of lenght numtasks)
+	// Entry i specifies the number of elements in receive buffer of the process i
 	recvcounts = (int *)malloc(numtasks * sizeof(int));
+	// integer array (of lenght numtasks)
+	// Entry i specifies the number of elements in send buffer of the process i
 	sendcounts = (int *)malloc(numtasks * sizeof(int));
 
 	long i, k;
+	// initialization of the three previous arrays
 	for(i = 0; i < numtasks; i++) {
 		if(i < nextra) {
 			sendcounts[i] = recvcounts[i] = nmin + 1;
@@ -141,48 +154,55 @@ int main(int argc, char *argv[]) {
 		k += sendcounts[i];
 	}
 
+	// The main process is process 0
 	int source = 0;
 
+	// every process allocates its receive buffer
 	unsigned char *recvBuffer = (unsigned char *)malloc(recvcounts[rank] * sizeof(unsigned char));
+	// the image is scattered in parts to all processes in the communicator MPI_COMM_WORLD
 	MPI_Scatterv(image, sendcounts, displs, MPI_UNSIGNED_CHAR, recvBuffer, recvcounts[rank], MPI_UNSIGNED_CHAR, source, MPI_COMM_WORLD);
 
 
+	// global min and max (for each RGB component of the image)
 	unsigned char *min = (unsigned char *)malloc(3 * sizeof(unsigned char));
 	unsigned char *max = (unsigned char *)malloc(3 * sizeof(unsigned char));
 
+	// local min and max (for each RGB component of the image) calculated by a single process
 	unsigned char *localMin = (unsigned char *)malloc(3 * sizeof(unsigned char));
 	unsigned char *localMax = (unsigned char *)malloc(3 * sizeof(unsigned char));
 
+	// initialization of localMin and localMax
 	for(i = 0; i < 3; i++) {
 		localMin[i] = 255;
 		localMax[i] = 0;
 	}
 	struct timeval tStart, tEnd;
 
+	// every process finds the min and max of its part of the image
 	BENCH_GETTIME(&tStart);
 	findMinMax(recvBuffer, localMin, localMax, recvcounts[rank]);
 	BENCH_GETTIME(&tEnd);
 	print_duration(tStart, tEnd);
-	/*
-	MPI_Reduce(localMin, min, 3, MPI_UNSIGNED_CHAR, MPI_MIN, source, MPI_COMM_WORLD);
-	MPI_Reduce(localMax, max, 3, MPI_UNSIGNED_CHAR, MPI_MAX, source, MPI_COMM_WORLD);
-	MPI_Bcast(min, 3, MPI_UNSIGNED_CHAR, source, MPI_COMM_WORLD);
-	MPI_Bcast(max, 3, MPI_UNSIGNED_CHAR, source, MPI_COMM_WORLD);
-*/
+
+	// localMin and localMax are reduced into min and max
 	MPI_Allreduce(localMin, min, 3, MPI_UNSIGNED_CHAR, MPI_MIN, MPI_COMM_WORLD);
 	MPI_Allreduce(localMax, max, 3, MPI_UNSIGNED_CHAR, MPI_MAX, MPI_COMM_WORLD);
 
+	// every process normalizes its parts of the image
 	BENCH_GETTIME(&tStart);
 	normalize(recvBuffer, atoi(argv[1]), atoi(argv[2]), min, max, recvcounts[rank]);
 	BENCH_GETTIME(&tEnd);
 	print_duration(tStart, tEnd);
 
+	// every normalized part is gathered into image
 	MPI_Gatherv(recvBuffer, sendcounts[rank], MPI_UNSIGNED_CHAR, image, recvcounts, displs, MPI_UNSIGNED_CHAR, source, MPI_COMM_WORLD);
 
+	// the main process saves the image
 	if(rank == 0) {
 		writePPM("result.ppm", image);
 	}
 
+	// free allocated memory
 	free(min);
 	free(max);
 	free(localMin);
