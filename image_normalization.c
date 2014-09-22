@@ -124,10 +124,12 @@ int main(int argc, char *argv[]) {
 	int *sendcounts;
 
 	// MPI initialization
+	printf("initializing MPI\n");
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
-
+	printf("rank: %d\n", rank);
+	printf("size: %d\n", numtasks);
 	// min size of the arrays and extra pixel to allocate
 	int nmin = x * y * 3 / numtasks;
 	int nextra = x * y * 3 % numtasks;
